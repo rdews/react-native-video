@@ -21,11 +21,15 @@ import com.android.vending.expansion.zipfile.APKExpansionSupport;
 import com.android.vending.expansion.zipfile.ZipResourceFile;
 
 import java.io.IOException;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.HashMap;
 import java.util.Map;
 
 public class ReactVideoView extends ScalableVideoView implements MediaPlayer.OnPreparedListener, MediaPlayer
         .OnErrorListener, MediaPlayer.OnBufferingUpdateListener, MediaPlayer.OnCompletionListener, MediaPlayer.OnInfoListener, LifecycleEventListener, MediaController.MediaPlayerControl {
+
+    private static List<SetDataSource> setSourceQueue = new ArrayList<SetDataSource>();
 
     public enum Events {
         EVENT_LOAD_START("onVideoLoadStart"),
@@ -168,6 +172,7 @@ public class ReactVideoView extends ScalableVideoView implements MediaPlayer.OnP
             mMediaPlayerValid = false;
             mMediaPlayer.stop();
             mMediaPlayer.release();
+            mMediaPlayer = null;
         }
     }
 
@@ -195,18 +200,33 @@ public class ReactVideoView extends ScalableVideoView implements MediaPlayer.OnP
         initializeMediaPlayerIfNeeded();
         mMediaPlayer.reset();
 
-        Thread thread = new Thread(new SetDataSource(uriString, type, isNetwork, isAsset));
-        thread.start();
+        setSourceQueue.add(new SetDataSource(this, uriString, type, isNetwork, isAsset));
+        if(setSourceQueue.size()==1) {
+            handleSetSource();
+        }
     }
 
-    class SetDataSource implements Runnable {
+    private void handleNextSetSource() {
+        setSourceQueue.remove(0);
+        if (setSourceQueue.size()>0) {
+            handleSetSource();
+        }
+    }
+
+    private void handleSetSource() {
+        new Thread(setSourceQueue.get(0)).start();
+    }
+
+    static class SetDataSource implements Runnable {
 
         private final String uriString;
         private final String type;
         private final boolean isNetwork;
         private final boolean isAsset;
+        private final ReactVideoView view;
 
-        SetDataSource(final String uriString, final String type, final boolean isNetwork, final boolean isAsset) {
+        SetDataSource(ReactVideoView view, final String uriString, final String type, final boolean isNetwork, final boolean isAsset) {
+            this.view = view;
             this.uriString = uriString;
             this.type = type;
             this.isNetwork = isNetwork;
@@ -232,20 +252,20 @@ public class ReactVideoView extends ScalableVideoView implements MediaPlayer.OnP
                         headers.put("Cookie", cookie);
                     }
 
-                    setDataSource(mThemedReactContext, parsedUrl, headers);
+                    view.setDataSource(view.mThemedReactContext, parsedUrl, headers);
                 } else if (isAsset) {
                     if (uriString.startsWith("content://")) {
                         Uri parsedUrl = Uri.parse(uriString);
-                        setDataSource(mThemedReactContext, parsedUrl);
+                        view.setDataSource(view.mThemedReactContext, parsedUrl);
                     } else {
-                        setDataSource(uriString);
+                        view.setDataSource(uriString);
                     }
                 } else {
                     ZipResourceFile expansionFile = null;
                     AssetFileDescriptor fd = null;
-                    if (mMainVer > 0) {
+                    if (view.mMainVer > 0) {
                         try {
-                            expansionFile = APKExpansionSupport.getAPKExpansionZipFile(mThemedReactContext, mMainVer, mPatchVer);
+                            expansionFile = APKExpansionSupport.getAPKExpansionZipFile(view.mThemedReactContext, view.mMainVer, view.mPatchVer);
                             fd = expansionFile.getAssetFileDescriptor(uriString.replace(".mp4", "") + ".mp4");
                         } catch (IOException e) {
                             e.printStackTrace();
@@ -254,13 +274,13 @@ public class ReactVideoView extends ScalableVideoView implements MediaPlayer.OnP
                         }
                     }
                     if (fd == null) {
-                        setRawData(mThemedReactContext.getResources().getIdentifier(
+                        view.setRawData(view.mThemedReactContext.getResources().getIdentifier(
                                 uriString,
                                 "raw",
-                                mThemedReactContext.getPackageName()
+                                view.mThemedReactContext.getPackageName()
                         ));
                     } else {
-                        setDataSource(fd.getFileDescriptor(), fd.getStartOffset(), fd.getLength());
+                        view.setDataSource(fd.getFileDescriptor(), fd.getStartOffset(), fd.getLength());
                     }
                 }
             } catch (Exception e) {
@@ -272,21 +292,23 @@ public class ReactVideoView extends ScalableVideoView implements MediaPlayer.OnP
             src.putString(ReactVideoViewManager.PROP_SRC_URI, uriString);
             src.putString(ReactVideoViewManager.PROP_SRC_TYPE, type);
             src.putBoolean(ReactVideoViewManager.PROP_SRC_IS_NETWORK, isNetwork);
-            if (mMainVer > 0) {
-                src.putInt(ReactVideoViewManager.PROP_SRC_MAINVER, mMainVer);
-                if (mPatchVer > 0) {
-                    src.putInt(ReactVideoViewManager.PROP_SRC_PATCHVER, mPatchVer);
+            if (view.mMainVer > 0) {
+                src.putInt(ReactVideoViewManager.PROP_SRC_MAINVER, view.mMainVer);
+                if (view.mPatchVer > 0) {
+                    src.putInt(ReactVideoViewManager.PROP_SRC_PATCHVER, view.mPatchVer);
                 }
             }
             WritableMap event = Arguments.createMap();
             event.putMap(ReactVideoViewManager.PROP_SRC, src);
-            mEventEmitter.receiveEvent(getId(), Events.EVENT_LOAD_START.toString(), event);
+            view.mEventEmitter.receiveEvent(view.getId(), Events.EVENT_LOAD_START.toString(), event);
 
             // not async to prevent random crashes on Android playback from local resource due to race conditions
             try {
-                prepare(ReactVideoView.this);
+                view.prepare(view);
             } catch (Exception e) {
                 e.printStackTrace();
+                setSourceQueue.add(this);
+                view.handleNextSetSource();
             }
         }
     }
@@ -420,6 +442,8 @@ public class ReactVideoView extends ScalableVideoView implements MediaPlayer.OnP
                 }
             });
         }
+
+       handleNextSetSource();
     }
 
     @Override
@@ -510,6 +534,12 @@ public class ReactVideoView extends ScalableVideoView implements MediaPlayer.OnP
 
         mMediaPlayerValid = false;
         super.onDetachedFromWindow();
+        for (SetDataSource setDataSource : setSourceQueue) {
+            if (setDataSource.view == this) {
+                setSourceQueue.remove(setDataSource);
+                break;
+            }
+        }
     }
 
     @Override
