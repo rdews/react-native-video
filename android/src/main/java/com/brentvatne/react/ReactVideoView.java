@@ -1,11 +1,13 @@
 package com.brentvatne.react;
 
 import android.content.res.AssetFileDescriptor;
+import android.graphics.SurfaceTexture;
 import android.media.MediaPlayer;
 import android.net.Uri;
 import android.os.Handler;
 import android.util.Log;
 import android.view.MotionEvent;
+import android.view.Surface;
 import android.webkit.CookieManager;
 
 import android.widget.MediaController;
@@ -164,6 +166,7 @@ public class ReactVideoView extends ScalableVideoView implements MediaPlayer.OnP
         }
     }
 
+
     public void cleanupMediaPlayerResources() {
         if ( mediaController != null ) {
             mediaController.hide();
@@ -185,6 +188,12 @@ public class ReactVideoView extends ScalableVideoView implements MediaPlayer.OnP
         if (uriString == null || (uriString.equals(mSrcUriString) && mMediaPlayerValid)) {
             return;
         }
+
+        for (SetDataSource setDataSource : setSourceQueue) {
+            if (setDataSource.view == this) {
+               return;
+            }
+        }
         mSrcUriString = uriString;
         mSrcType = type;
         mSrcIsNetwork = isNetwork;
@@ -200,46 +209,11 @@ public class ReactVideoView extends ScalableVideoView implements MediaPlayer.OnP
         initializeMediaPlayerIfNeeded();
         mMediaPlayer.reset();
 
-        setSourceQueue.add(new SetDataSource(this, uriString, type, isNetwork, isAsset));
-        if(setSourceQueue.size()==1) {
-            handleSetSource();
-        }
-    }
-
-    private void handleNextSetSource() {
-        setSourceQueue.remove(0);
-        if (setSourceQueue.size()>0) {
-            handleSetSource();
-        }
-    }
-
-    private void handleSetSource() {
-        new Thread(setSourceQueue.get(0)).start();
-    }
-
-    static class SetDataSource implements Runnable {
-
-        private final String uriString;
-        private final String type;
-        private final boolean isNetwork;
-        private final boolean isAsset;
-        private final ReactVideoView view;
-
-        SetDataSource(ReactVideoView view, final String uriString, final String type, final boolean isNetwork, final boolean isAsset) {
-            this.view = view;
-            this.uriString = uriString;
-            this.type = type;
-            this.isNetwork = isNetwork;
-            this.isAsset = isAsset;
-        }
-
-        @Override
-        public void run() {
-            try {
-                if (isNetwork) {
-                    // Use the shared CookieManager to access the cookies
-                    // set by WebViews inside the same app
-                    CookieManager cookieManager = CookieManager.getInstance();
+        try {
+            if (isNetwork) {
+                // Use the shared CookieManager to access the cookies
+                // set by WebViews inside the same app
+                CookieManager cookieManager = CookieManager.getInstance();
 
                     Uri parsedUrl = Uri.parse(uriString);
                     Uri.Builder builtUrl = parsedUrl.buildUpon();
@@ -302,12 +276,73 @@ public class ReactVideoView extends ScalableVideoView implements MediaPlayer.OnP
             event.putMap(ReactVideoViewManager.PROP_SRC, src);
             view.mEventEmitter.receiveEvent(view.getId(), Events.EVENT_LOAD_START.toString(), event);
 
+        setSourceQueue.add(new SetDataSource(this, uriString, type, isNetwork, isAsset));
+        handleSetSource();
+    }
+
+    private void handleNextSetSource() {
+        handleSetSource();
+    }
+
+    private void handleSetSource() {
+        if (setSourceQueue.size()>0) {
+            SetDataSource setDataSource = setSourceQueue.get(0);
+            if (!setDataSource.isStarted()) {
+                setDataSource.startThread();
+            } else if(!setDataSource.isRunning()) {
+                setSourceQueue.remove(0);
+                handleSetSource();
+            }
+        }
+    }
+
+    static class SetDataSource implements Runnable {
+
+        private final String uriString;
+        private final String type;
+        private final boolean isNetwork;
+        private final boolean isAsset;
+        private final ReactVideoView view;
+        private int retries = 0;
+        private Thread thread;
+
+        SetDataSource(ReactVideoView view, final String uriString, final String type, final boolean isNetwork, final boolean isAsset) {
+            this.view = view;
+            this.uriString = uriString;
+            this.type = type;
+            this.isNetwork = isNetwork;
+            this.isAsset = isAsset;
+
+        }
+
+        public boolean isStarted() {
+            return thread != null;
+        }
+
+        public boolean isRunning() {
+            return thread.isAlive();
+        }
+
+        public void startThread() {
+            thread = new Thread(this);
+            thread.start();
+        }
+
+        @Override
+        public void run() {
             // not async to prevent random crashes on Android playback from local resource due to race conditions
+            if (view.mMediaPlayer == null) {
+                return;
+            }
             try {
                 view.prepare(view);
             } catch (Exception e) {
                 e.printStackTrace();
-                setSourceQueue.add(this);
+                retries++;
+                if (retries <3) {
+                    thread = null;
+                    setSourceQueue.add(this);
+                }
                 view.handleNextSetSource();
             }
         }
