@@ -226,20 +226,20 @@ public class ReactVideoView extends ScalableVideoView implements MediaPlayer.OnP
                         headers.put("Cookie", cookie);
                     }
 
-                    view.setDataSource(view.mThemedReactContext, parsedUrl, headers);
+                    setDataSource(mThemedReactContext, parsedUrl, headers);
                 } else if (isAsset) {
                     if (uriString.startsWith("content://")) {
                         Uri parsedUrl = Uri.parse(uriString);
-                        view.setDataSource(view.mThemedReactContext, parsedUrl);
+                        setDataSource(mThemedReactContext, parsedUrl);
                     } else {
-                        view.setDataSource(uriString);
+                        setDataSource(uriString);
                     }
                 } else {
                     ZipResourceFile expansionFile = null;
                     AssetFileDescriptor fd = null;
-                    if (view.mMainVer > 0) {
+                    if (mMainVer > 0) {
                         try {
-                            expansionFile = APKExpansionSupport.getAPKExpansionZipFile(view.mThemedReactContext, view.mMainVer, view.mPatchVer);
+                            expansionFile = APKExpansionSupport.getAPKExpansionZipFile(mThemedReactContext, mMainVer, mPatchVer);
                             fd = expansionFile.getAssetFileDescriptor(uriString.replace(".mp4", "") + ".mp4");
                         } catch (IOException e) {
                             e.printStackTrace();
@@ -248,13 +248,13 @@ public class ReactVideoView extends ScalableVideoView implements MediaPlayer.OnP
                         }
                     }
                     if (fd == null) {
-                        view.setRawData(view.mThemedReactContext.getResources().getIdentifier(
+                        setRawData(mThemedReactContext.getResources().getIdentifier(
                                 uriString,
                                 "raw",
-                                view.mThemedReactContext.getPackageName()
+                                mThemedReactContext.getPackageName()
                         ));
                     } else {
-                        view.setDataSource(fd.getFileDescriptor(), fd.getStartOffset(), fd.getLength());
+                        setDataSource(fd.getFileDescriptor(), fd.getStartOffset(), fd.getLength());
                     }
                 }
             } catch (Exception e) {
@@ -266,15 +266,15 @@ public class ReactVideoView extends ScalableVideoView implements MediaPlayer.OnP
             src.putString(ReactVideoViewManager.PROP_SRC_URI, uriString);
             src.putString(ReactVideoViewManager.PROP_SRC_TYPE, type);
             src.putBoolean(ReactVideoViewManager.PROP_SRC_IS_NETWORK, isNetwork);
-            if (view.mMainVer > 0) {
-                src.putInt(ReactVideoViewManager.PROP_SRC_MAINVER, view.mMainVer);
-                if (view.mPatchVer > 0) {
-                    src.putInt(ReactVideoViewManager.PROP_SRC_PATCHVER, view.mPatchVer);
+            if (mMainVer > 0) {
+                src.putInt(ReactVideoViewManager.PROP_SRC_MAINVER, mMainVer);
+                if (mPatchVer > 0) {
+                    src.putInt(ReactVideoViewManager.PROP_SRC_PATCHVER, mPatchVer);
                 }
             }
             WritableMap event = Arguments.createMap();
             event.putMap(ReactVideoViewManager.PROP_SRC, src);
-            view.mEventEmitter.receiveEvent(view.getId(), Events.EVENT_LOAD_START.toString(), event);
+            mEventEmitter.receiveEvent(getId(), Events.EVENT_LOAD_START.toString(), event);
 
         setSourceQueue.add(new SetDataSource(this, uriString, type, isNetwork, isAsset));
         handleSetSource();
