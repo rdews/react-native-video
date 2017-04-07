@@ -1,14 +1,15 @@
-#import "RCTConvert.h"
+#import <React/RCTConvert.h>
 #import "RCTVideo.h"
-#import "RCTBridgeModule.h"
-#import "RCTEventDispatcher.h"
-#import "UIView+React.h"
+#import <React/RCTBridgeModule.h>
+#import <React/RCTEventDispatcher.h>
+#import <React/UIView+React.h>
 
 static NSString *const statusKeyPath = @"status";
 static NSString *const playbackLikelyToKeepUpKeyPath = @"playbackLikelyToKeepUp";
 static NSString *const playbackBufferEmptyKeyPath = @"playbackBufferEmpty";
 static NSString *const readyForDisplayKeyPath = @"readyForDisplay";
 static NSString *const playbackRate = @"rate";
+static NSString *const timedMetadata = @"timedMetadata";
 
 @implementation RCTVideo
 {
@@ -184,7 +185,7 @@ static NSString *const playbackRate = @"rate";
    CMTime currentTime = _player.currentTime;
    const Float64 duration = CMTimeGetSeconds(playerDuration);
    const Float64 currentTimeSecs = CMTimeGetSeconds(currentTime);
-   if( currentTimeSecs >= 0) {
+   if( currentTimeSecs >= 0 && self.onVideoProgress) {
       self.onVideoProgress(@{
                              @"currentTime": [NSNumber numberWithFloat:CMTimeGetSeconds(currentTime)],
                              @"playableDuration": [self calculatePlayableDuration],
@@ -226,6 +227,7 @@ static NSString *const playbackRate = @"rate";
   [_playerItem addObserver:self forKeyPath:statusKeyPath options:0 context:nil];
   [_playerItem addObserver:self forKeyPath:playbackBufferEmptyKeyPath options:0 context:nil];
   [_playerItem addObserver:self forKeyPath:playbackLikelyToKeepUpKeyPath options:0 context:nil];
+  [_playerItem addObserver:self forKeyPath:timedMetadata options:NSKeyValueObservingOptionNew context:nil];
   _playerItemObserversSet = YES;
 }
 
@@ -238,6 +240,7 @@ static NSString *const playbackRate = @"rate";
     [_playerItem removeObserver:self forKeyPath:statusKeyPath];
     [_playerItem removeObserver:self forKeyPath:playbackBufferEmptyKeyPath];
     [_playerItem removeObserver:self forKeyPath:playbackLikelyToKeepUpKeyPath];
+    [_playerItem removeObserver:self forKeyPath:timedMetadata];
     _playerItemObserversSet = NO;
   }
 }
@@ -277,12 +280,16 @@ static NSString *const playbackRate = @"rate";
 
   dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
     //Perform on next run loop, otherwise onVideoLoadStart is nil
-    self.onVideoLoadStart(@{@"src": @{
-                                @"uri": [source objectForKey:@"uri"],
-                                @"type": [source objectForKey:@"type"],
-                                @"isNetwork": [NSNumber numberWithBool:(bool)[source objectForKey:@"isNetwork"]]},
-                            @"target": self.reactTag
-                            });
+    if(self.onVideoLoadStart) {
+      id uri = [source objectForKey:@"uri"];
+      id type = [source objectForKey:@"type"];
+      self.onVideoLoadStart(@{@"src": @{
+                                        @"uri": uri ? uri : [NSNull null],
+                                        @"type": type ? type : [NSNull null],
+                                        @"isNetwork": [NSNumber numberWithBool:(bool)[source objectForKey:@"isNetwork"]]},
+                                        @"target": self.reactTag
+                                        });
+    }
   });
 }
 
@@ -314,6 +321,34 @@ static NSString *const playbackRate = @"rate";
 {
    if (object == _playerItem) {
 
+    // When timeMetadata is read the event onTimedMetadata is triggered
+    if ([keyPath isEqualToString: timedMetadata])
+    {
+
+        
+        NSArray<AVMetadataItem *> *items = [change objectForKey:@"new"];
+        if (items && ![items isEqual:[NSNull null]] && items.count > 0) {
+            
+            NSMutableArray *array = [NSMutableArray new];
+            for (AVMetadataItem *item in items) {
+                
+                NSString *value = item.value;
+                NSString *identifier = item.identifier;
+                
+                if (![value isEqual: [NSNull null]]) {
+                    NSDictionary *dictionary = [[NSDictionary alloc] initWithObjects:@[value, identifier] forKeys:@[@"value", @"identifier"]];
+                    
+                    [array addObject:dictionary];
+                }
+            }
+            
+            self.onTimedMetadata(@{
+                                   @"target": self.reactTag,
+                                   @"metadata": array
+                                   });
+        }
+    }
+
     if ([keyPath isEqualToString:statusKeyPath]) {
       // Handle player item status change.
       if (_playerItem.status == AVPlayerItemStatusReadyToPlay) {
@@ -341,53 +376,59 @@ static NSString *const playbackRate = @"rate";
           } else
             orientation = @"portrait";
         }
-
-        self.onVideoLoad(@{@"duration": [NSNumber numberWithFloat:duration],
-                           @"currentTime": [NSNumber numberWithFloat:CMTimeGetSeconds(_playerItem.currentTime)],
-                           @"canPlayReverse": [NSNumber numberWithBool:_playerItem.canPlayReverse],
-                           @"canPlayFastForward": [NSNumber numberWithBool:_playerItem.canPlayFastForward],
-                           @"canPlaySlowForward": [NSNumber numberWithBool:_playerItem.canPlaySlowForward],
-                           @"canPlaySlowReverse": [NSNumber numberWithBool:_playerItem.canPlaySlowReverse],
-                           @"canStepBackward": [NSNumber numberWithBool:_playerItem.canStepBackward],
-                           @"canStepForward": [NSNumber numberWithBool:_playerItem.canStepForward],
-                           @"naturalSize": @{
-                              @"width": width,
-                              @"height": height,
-                              @"orientation": orientation
-                           },
-                           @"target": self.reactTag});
+          
+      if(self.onVideoLoad) {
+          self.onVideoLoad(@{@"duration": [NSNumber numberWithFloat:duration],
+                             @"currentTime": [NSNumber numberWithFloat:CMTimeGetSeconds(_playerItem.currentTime)],
+                             @"canPlayReverse": [NSNumber numberWithBool:_playerItem.canPlayReverse],
+                             @"canPlayFastForward": [NSNumber numberWithBool:_playerItem.canPlayFastForward],
+                             @"canPlaySlowForward": [NSNumber numberWithBool:_playerItem.canPlaySlowForward],
+                             @"canPlaySlowReverse": [NSNumber numberWithBool:_playerItem.canPlaySlowReverse],
+                             @"canStepBackward": [NSNumber numberWithBool:_playerItem.canStepBackward],
+                             @"canStepForward": [NSNumber numberWithBool:_playerItem.canStepForward],
+                             @"naturalSize": @{
+                                     @"width": width,
+                                     @"height": height,
+                                     @"orientation": orientation
+                                     },
+                             @"target": self.reactTag});
+      }
 
         [self attachListeners];
         [self applyModifiers];
-      } else if(_playerItem.status == AVPlayerItemStatusFailed) {
+      } else if(_playerItem.status == AVPlayerItemStatusFailed && self.onVideoError) {
         self.onVideoError(@{@"error": @{@"code": [NSNumber numberWithInteger: _playerItem.error.code],
                                         @"domain": _playerItem.error.domain},
                                         @"target": self.reactTag});
       }
     } else if ([keyPath isEqualToString:playbackBufferEmptyKeyPath]) {
       _playerBufferEmpty = YES;
+      self.onVideoBuffer(@{@"isBuffering": @(YES), @"target": self.reactTag});
     } else if ([keyPath isEqualToString:playbackLikelyToKeepUpKeyPath]) {
       // Continue playing (or not if paused) after being paused due to hitting an unbuffered zone.
       if ((!(_controls || _fullscreenPlayerPresented) || _playerBufferEmpty) && _playerItem.playbackLikelyToKeepUp) {
         [self setPaused:_paused];
       }
       _playerBufferEmpty = NO;
+      self.onVideoBuffer(@{@"isBuffering": @(NO), @"target": self.reactTag});
     }
    } else if (object == _playerLayer) {
       if([keyPath isEqualToString:readyForDisplayKeyPath] && [change objectForKey:NSKeyValueChangeNewKey]) {
-        if([change objectForKey:NSKeyValueChangeNewKey]) {
+        if([change objectForKey:NSKeyValueChangeNewKey] && self.onReadyForDisplay) {
           self.onReadyForDisplay(@{@"target": self.reactTag});
         }
     }
   } else if (object == _player) {
       if([keyPath isEqualToString:playbackRate]) {
-          if (self.onPlaybackRateChange) {
+          if(self.onPlaybackRateChange) {
               self.onPlaybackRateChange(@{@"playbackRate": [NSNumber numberWithFloat:_player.rate],
                                           @"target": self.reactTag});
           }
           if(_playbackStalled && _player.rate > 0) {
-              self.onPlaybackResume(@{@"playbackRate": [NSNumber numberWithFloat:_player.rate],
-                                      @"target": self.reactTag});
+              if(self.onPlaybackResume) {
+                  self.onPlaybackResume(@{@"playbackRate": [NSNumber numberWithFloat:_player.rate],
+                                          @"target": self.reactTag});
+              }
               _playbackStalled = NO;
           }
       }
@@ -411,13 +452,17 @@ static NSString *const playbackRate = @"rate";
 
 - (void)playbackStalled:(NSNotification *)notification
 {
-  self.onPlaybackStalled(@{@"target": self.reactTag});
+  if(self.onPlaybackStalled) {
+    self.onPlaybackStalled(@{@"target": self.reactTag});
+  }
   _playbackStalled = YES;
 }
 
 - (void)playerItemDidReachEnd:(NSNotification *)notification
 {
-  self.onVideoEnd(@{@"target": self.reactTag});
+  if(self.onVideoEnd) {
+      self.onVideoEnd(@{@"target": self.reactTag});
+  }
 
   if (_repeat) {
     AVPlayerItem *item = [notification object];
@@ -486,12 +531,17 @@ static NSString *const playbackRate = @"rate";
     CMTime current = item.currentTime;
     // TODO figure out a good tolerance level
     CMTime tolerance = CMTimeMake(1000, timeScale);
+    BOOL wasPaused = _paused;
 
     if (CMTimeCompare(current, cmSeekTime) != 0) {
+      if (!wasPaused) [_player pause];
       [_player seekToTime:cmSeekTime toleranceBefore:tolerance toleranceAfter:tolerance completionHandler:^(BOOL finished) {
-        self.onVideoSeek(@{@"currentTime": [NSNumber numberWithFloat:CMTimeGetSeconds(item.currentTime)],
-                           @"seekTime": [NSNumber numberWithFloat:seekTime],
-                           @"target": self.reactTag});
+        if (!wasPaused) [_player play];
+        if(self.onVideoSeek) {
+            self.onVideoSeek(@{@"currentTime": [NSNumber numberWithFloat:CMTimeGetSeconds(item.currentTime)],
+                               @"seekTime": [NSNumber numberWithFloat:seekTime],
+                               @"target": self.reactTag});
+        }
       }];
 
       _pendingSeek = false;
@@ -573,11 +623,15 @@ static NSString *const playbackRate = @"rate";
         if( viewController )
         {
             _presentingViewController = viewController;
-            self.onVideoFullscreenPlayerWillPresent(@{@"target": self.reactTag});
+            if(self.onVideoFullscreenPlayerWillPresent) {
+                self.onVideoFullscreenPlayerWillPresent(@{@"target": self.reactTag});
+            }
             [viewController presentViewController:_playerViewController animated:true completion:^{
                 _playerViewController.showsPlaybackControls = YES;
                 _fullscreenPlayerPresented = fullscreen;
-                self.onVideoFullscreenPlayerDidPresent(@{@"target": self.reactTag});
+                if(self.onVideoFullscreenPlayerDidPresent) {
+                    self.onVideoFullscreenPlayerDidPresent(@{@"target": self.reactTag});
+                }
             }];
         }
     }
@@ -655,7 +709,7 @@ static NSString *const playbackRate = @"rate";
 
 - (void)videoPlayerViewControllerWillDismiss:(AVPlayerViewController *)playerViewController
 {
-    if (_playerViewController == playerViewController && _fullscreenPlayerPresented)
+    if (_playerViewController == playerViewController && _fullscreenPlayerPresented && self.onVideoFullscreenPlayerWillDismiss)
     {
         self.onVideoFullscreenPlayerWillDismiss(@{@"target": self.reactTag});
     }
@@ -667,8 +721,11 @@ static NSString *const playbackRate = @"rate";
     {
         _fullscreenPlayerPresented = false;
         _presentingViewController = nil;
+        _playerViewController = nil;
         [self applyModifiers];
-        self.onVideoFullscreenPlayerDidDismiss(@{@"target": self.reactTag});
+        if(self.onVideoFullscreenPlayerDidDismiss) {
+            self.onVideoFullscreenPlayerDidDismiss(@{@"target": self.reactTag});
+        }
     }
 }
 
